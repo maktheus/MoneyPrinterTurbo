@@ -1,0 +1,114 @@
+name: Release NicheBot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'nichebot/**'
+  workflow_dispatch:   # permite disparar manualmente pelo GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Build em paralelo para cada plataforma ─────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            asset: nichebot-windows-amd64.exe
+          - goos: linux
+            goarch: amd64
+            asset: nichebot-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset: nichebot-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            asset: nichebot-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset: nichebot-darwin-arm64   # Apple Silicon (M1/M2/M3)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: nichebot/go.sum
+
+      - name: Build ${{ matrix.asset }}
+        working-directory: nichebot
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0   # modernc.org/sqlite é puro Go — funciona sem CGO
+        run: go build -ldflags="-s -w" -o ${{ matrix.asset }} .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: nichebot/${{ matrix.asset }}
+
+  # ── Publica o release "nichebot-latest" ────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nichebot-*
+          merge-multiple: true
+
+      - name: Deletar release anterior (se existir)
+        run: gh release delete nichebot-latest --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nichebot-latest
+          name: "NicheBot — latest"
+          body: |
+            Build automático do último commit em `main`.
+
+            ---
+
+            ## ⚡ Quick start
+
+            ### Windows (PowerShell)
+            ```powershell
+            Invoke-WebRequest -Uri https://github.com/${{ github.repository }}/releases/download/nichebot-latest/nichebot-windows-amd64.exe -OutFile nichebot.exe; .\nichebot.exe
+            ```
+
+            ### Linux / VPS (amd64)
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/nichebot-latest/nichebot-linux-amd64 -o nichebot \
+              && chmod +x nichebot && ./nichebot
+            ```
+
+            ### Linux / VPS (ARM — Oracle Free Tier, Raspberry Pi)
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/nichebot-latest/nichebot-linux-arm64 -o nichebot \
+              && chmod +x nichebot && ./nichebot
+            ```
+
+            ### macOS (Apple Silicon M1/M2/M3)
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/nichebot-latest/nichebot-darwin-arm64 -o nichebot \
+              && chmod +x nichebot && ./nichebot
+            ```
+
+            ---
+
+            > Na **primeira execução** sem `nichebot.toml`, o binário cria o arquivo de config e sai.
+            > Edite o `nichebot.toml` com suas chaves de API e rode novamente.
+          files: nichebot-*
+          prerelease: false
+          make_latest: false   # não substitui o release "latest" principal do repo
