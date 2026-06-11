@@ -32,7 +32,11 @@ var translations = map[string]map[string]string{
 	"history_header": {"pt": "HISTÓRICO", "en": "HISTORY"},
 	"no_pending":     {"pt": "Nenhum vídeo aguardando aprovação.", "en": "No videos pending approval."},
 	"no_history":     {"pt": "Nenhum post ainda.", "en": "No posts yet."},
-	"help_detail":    {"pt": "[A] Aprovar  [R] Rejeitar  [O] Abrir vídeo  [↑↓] Navegar  [Esc] Voltar", "en": "[A] Approve  [R] Reject  [O] Open video  [↑↓] Navigate  [Esc] Back"},
+	"help_detail":    {"pt": "[Tab/←/→] Trocar aba  [↑↓] Navegar  [Esc] Voltar", "en": "[Tab/←/→] Switch tab  [↑↓] Navigate  [Esc] Back"},
+	"help_pending":   {"pt": "[A] Aprovar  [R] Rejeitar  [O] Abrir vídeo", "en": "[A] Approve  [R] Reject  [O] Open video"},
+	"tab_config":     {"pt": "Config", "en": "Config"},
+	"tab_pending":    {"pt": "Aprovação", "en": "Approval"},
+	"tab_history":    {"pt": "Histórico", "en": "History"},
 	"config_header":  {"pt": "CONFIGURAÇÃO", "en": "CONFIGURATION"},
 	"settings_title": {"pt": "◆ Configurações", "en": "◆ Settings"},
 	"lang_label":     {"pt": "Idioma da TUI", "en": "TUI Language"},
@@ -86,6 +90,9 @@ var (
 	focusedBorder = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(purple)
 	blurredBorder = lipgloss.NewStyle().BorderStyle(lipgloss.RoundedBorder()).BorderForeground(dark)
 	tableStyle    = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(dark)
+
+	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(white).Background(purple).Padding(0, 1)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(muted).Padding(0, 1)
 
 	infoBox = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -149,7 +156,7 @@ type Model struct {
 	detailHistory []models.Post
 	pendingTable  table.Model
 	historyTable  table.Model
-	detailInHist  bool // focus is on history table (vs pending)
+	detailTab     int // 0=config 1=pending 2=history
 
 	// Add-channel form  (5 text inputs + platforms)
 	inputs      [6]textinput.Model // name, niche, count, cta, affLink, videoLang
@@ -454,8 +461,8 @@ func (m Model) handleDashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if ch := m.selectedChannel(); ch != nil {
 			m.detailCh = *ch
-			m.detailInHist = false
-			m.refreshDetail(ch.ID)
+			m.detailTab = detailTabConfig
+m.refreshDetail(ch.ID)
 			m.view = viewChannelDetail
 		}
 		return m, nil
@@ -496,6 +503,12 @@ func (m Model) handleDashKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // ── Channel detail keys ───────────────────────────────────────────────────────
 
+const (
+	detailTabConfig  = 0
+	detailTabPending = 1
+	detailTabHistory = 2
+)
+
 func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -503,12 +516,16 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 
-	case "tab":
-		m.detailInHist = !m.detailInHist
+	case "tab", "right":
+		m.detailTab = (m.detailTab + 1) % 3
+		return m, nil
+
+	case "shift+tab", "left":
+		m.detailTab = (m.detailTab + 2) % 3
 		return m, nil
 
 	case "A", "a":
-		if !m.detailInHist && len(m.detailPending) > 0 {
+		if m.detailTab == detailTabPending && len(m.detailPending) > 0 {
 			idx := m.pendingTable.Cursor()
 			if idx < len(m.detailPending) {
 				post := m.detailPending[idx]
@@ -522,7 +539,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "R", "r":
-		if !m.detailInHist && len(m.detailPending) > 0 {
+		if m.detailTab == detailTabPending && len(m.detailPending) > 0 {
 			idx := m.pendingTable.Cursor()
 			if idx < len(m.detailPending) {
 				post := m.detailPending[idx]
@@ -536,8 +553,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "O", "o":
-		// Open video with system default player
-		if !m.detailInHist && len(m.detailPending) > 0 {
+		if m.detailTab == detailTabPending && len(m.detailPending) > 0 {
 			idx := m.pendingTable.Cursor()
 			if idx < len(m.detailPending) {
 				openFile(m.detailPending[idx].VideoPath)
@@ -547,10 +563,11 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if m.detailInHist {
-		m.historyTable, cmd = m.historyTable.Update(msg)
-	} else {
+	switch m.detailTab {
+	case detailTabPending:
 		m.pendingTable, cmd = m.pendingTable.Update(msg)
+	case detailTabHistory:
+		m.historyTable, cmd = m.historyTable.Update(msg)
 	}
 	return m, cmd
 }
@@ -1075,59 +1092,62 @@ func (m Model) renderChannelDetail() string {
 	b.WriteString("  " + statusDot)
 	b.WriteString("\n\n")
 
-	// Config summary
-	b.WriteString(headerStyle.Render(tr(m.lang, "config_header")))
-	b.WriteString("\n")
-	cfg := [][]string{
-		{"Nicho", ch.Niche},
-		{"Plataformas", platIcons(ch.Platforms)},
-		{"Vídeos/dia", strconv.Itoa(ch.VideosPerDay)},
-		{"Idioma", orDefault(ch.VideoLanguage, m.cfg.MPT.VideoLanguage+" (global)")},
-		{"CTA", orDefault(ch.CTAText, dimStyle.Render("(não definido)"))},
-		{"Afiliado", orDefault(ch.AffiliateLink, dimStyle.Render("(não definido)"))},
+	// Tab bar
+	tabLabels := []string{
+		tr(m.lang, "tab_config"),
+		fmt.Sprintf("%s (%d)", tr(m.lang, "tab_pending"), len(m.detailPending)),
+		tr(m.lang, "tab_history"),
 	}
-	for _, row := range cfg {
-		b.WriteString(fmt.Sprintf("  %s  %s\n",
-			dimStyle.Render(padRight(row[0]+":", 12)),
-			row[1]))
+	for i, label := range tabLabels {
+		if i == m.detailTab {
+			b.WriteString(tabActiveStyle.Render(label))
+		} else {
+			b.WriteString(tabInactiveStyle.Render(label))
+		}
+		b.WriteString("  ")
 	}
 	b.WriteString("\n")
+	b.WriteString(dimStyle.Render(strings.Repeat("─", 48)))
+	b.WriteString("\n\n")
 
-	// Pending approval
-	pendFocused := !m.detailInHist
-	pendHeader := tr(m.lang, "pending_header")
-	if pendFocused {
-		b.WriteString(headerStyle.Render("▸ " + pendHeader))
-	} else {
-		b.WriteString(dimStyle.Render("  " + pendHeader))
-	}
-	b.WriteString("\n")
-	if len(m.detailPending) == 0 {
-		b.WriteString(dimStyle.Render("  " + tr(m.lang, "no_pending")))
-		b.WriteString("\n")
-	} else {
-		b.WriteString(tableStyle.Render(m.pendingTable.View()))
-	}
-	b.WriteString("\n")
+	// Tab content
+	switch m.detailTab {
+	case detailTabConfig:
+		rows := [][]string{
+			{"Nicho", ch.Niche},
+			{"Plataformas", platIcons(ch.Platforms)},
+			{"Vídeos/dia", strconv.Itoa(ch.VideosPerDay)},
+			{"Idioma", orDefault(ch.VideoLanguage, m.cfg.MPT.VideoLanguage+" (global)")},
+			{"CTA", orDefault(ch.CTAText, dimStyle.Render("(não definido)"))},
+			{"Afiliado", orDefault(ch.AffiliateLink, dimStyle.Render("(não definido)"))},
+		}
+		for _, row := range rows {
+			b.WriteString(fmt.Sprintf("  %s  %s\n",
+				dimStyle.Render(padRight(row[0]+":", 12)),
+				row[1]))
+		}
 
-	// History
-	histFocused := m.detailInHist
-	histHeader := tr(m.lang, "history_header")
-	if histFocused {
-		b.WriteString(headerStyle.Render("▸ " + histHeader))
-	} else {
-		b.WriteString(dimStyle.Render("  " + histHeader))
-	}
-	b.WriteString("\n")
-	if len(m.detailHistory) == 0 {
-		b.WriteString(dimStyle.Render("  " + tr(m.lang, "no_history")))
-		b.WriteString("\n")
-	} else {
-		b.WriteString(tableStyle.Render(m.historyTable.View()))
+	case detailTabPending:
+		if len(m.detailPending) == 0 {
+			b.WriteString(dimStyle.Render("  " + tr(m.lang, "no_pending")))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(tableStyle.Render(m.pendingTable.View()))
+			b.WriteString("\n\n")
+			b.WriteString(helpStyle.Render("  " + tr(m.lang, "help_pending")))
+		}
+
+	case detailTabHistory:
+		if len(m.detailHistory) == 0 {
+			b.WriteString(dimStyle.Render("  " + tr(m.lang, "no_history")))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(tableStyle.Render(m.historyTable.View()))
+		}
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(helpStyle.Render("  " + tr(m.lang, "help_detail") + "  [Tab] Trocar tabela"))
+	b.WriteString(helpStyle.Render("  " + tr(m.lang, "help_detail")))
 
 	return docStyle.Render(b.String())
 }
