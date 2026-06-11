@@ -33,6 +33,75 @@
 
 </div>
 
+---
+
+## nichebot 🤖 — Automated Multi-Channel Posting
+
+**nichebot** is a Go TUI that sits on top of MoneyPrinterTurbo and turns it into a fully automated social media machine. Pick a niche, configure once, leave running on a VPS.
+
+```
+Choose niche → Auto-generate videos → Review & approve → Post to TikTok / Instagram / Facebook / YouTube
+```
+
+### Install (one command, zero prerequisites)
+
+**Linux / macOS**
+```bash
+curl -fsSL https://raw.githubusercontent.com/maktheus/MoneyPrinterTurbo/main/install.sh | bash
+```
+
+**Windows** (PowerShell — run as normal user, no admin required)
+```powershell
+irm https://raw.githubusercontent.com/maktheus/MoneyPrinterTurbo/main/install.ps1 | iex
+```
+
+The installer sets up Docker automatically if it isn't present, pulls both images (~3 GB first time), and puts the `nichebot` command in your PATH.
+
+### Usage
+
+```
+nichebot            # start MoneyPrinterTurbo in background + open TUI
+nichebot update     # pull latest images
+nichebot stop       # stop background services
+nichebot logs       # tail MoneyPrinterTurbo logs
+nichebot status     # show container status
+nichebot uninstall  # remove everything
+```
+
+### Features
+
+- **Multiple channels** — one goroutine per channel, all running concurrently
+- **Video approval queue** — videos wait for your OK before posting
+- **Platform-aware captions** — clickable affiliate links on Facebook/YouTube; CTA text on TikTok/Instagram
+- **Telegram notifications** — get pinged when a video is ready for approval
+- **Per-channel language** — override video language per channel
+- **PT / EN interface** — toggle in Settings
+- **Crash recovery** — interrupted tasks reset automatically on restart
+
+### Monetization strategy
+
+| Platform | Program | Requirement |
+|---|---|---|
+| Facebook Reels | Reels Play Bonus (~$8-12/1k views) | Invite-only, varies by region |
+| TikTok | Creator Rewards | 10k+ followers |
+| Instagram | Reels Bonus | Invite-only |
+| YouTube Shorts | Partner Program | 1k subs + 4k watch hours |
+| All platforms | Affiliate links (Amazon, Chewy…) | Any account |
+
+### Architecture
+
+```
+nichebot TUI (Go binary, ~15 MB)
+  └── HTTP → MoneyPrinterTurbo API (Python + FFmpeg, port 8080)
+               └── generates video with LLM + TTS + stock footage
+  └── HTTP → Upload-Post API (external)
+               └── posts to TikTok / Instagram / Facebook / YouTube
+```
+
+Both services run as Docker containers on the same internal network. No ports need to be open to the internet.
+
+---
+
 ## 功能特性 🎯
 
 - [x] 完整的 **MVC架构**，代码 **结构清晰**，易于维护，支持 `API` 和 `Web界面`
