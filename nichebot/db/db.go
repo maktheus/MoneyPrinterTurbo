@@ -55,9 +55,10 @@ func (d *DB) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Add columns introduced after initial release — safe to ignore "duplicate column" errors.
+	// Additive migrations — safe to run on existing DBs (duplicate-column errors ignored).
 	d.conn.Exec(`ALTER TABLE channels ADD COLUMN cta_text TEXT NOT NULL DEFAULT ''`)
 	d.conn.Exec(`ALTER TABLE channels ADD COLUMN affiliate_link TEXT NOT NULL DEFAULT ''`)
+	d.conn.Exec(`ALTER TABLE channels ADD COLUMN video_language TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -65,16 +66,16 @@ func (d *DB) SaveChannel(ch models.Channel) error {
 	platforms, _ := json.Marshal(ch.Platforms)
 	_, err := d.conn.Exec(`
 		INSERT OR REPLACE INTO channels
-			(id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link, video_language)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, ch.ID, ch.Name, ch.Niche, string(platforms), ch.VideosPerDay,
-		string(ch.Status), ch.CreatedAt.Format(time.RFC3339), ch.CTAText, ch.AffiliateLink)
+		string(ch.Status), ch.CreatedAt.Format(time.RFC3339), ch.CTAText, ch.AffiliateLink, ch.VideoLanguage)
 	return err
 }
 
 func (d *DB) GetChannels() ([]models.Channel, error) {
 	rows, err := d.conn.Query(`
-		SELECT id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link
+		SELECT id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link, video_language
 		FROM channels ORDER BY created_at
 	`)
 	if err != nil {
@@ -87,7 +88,7 @@ func (d *DB) GetChannels() ([]models.Channel, error) {
 		var ch models.Channel
 		var platformsJSON, statusStr, createdAt string
 		if err := rows.Scan(&ch.ID, &ch.Name, &ch.Niche, &platformsJSON,
-			&ch.VideosPerDay, &statusStr, &createdAt, &ch.CTAText, &ch.AffiliateLink); err != nil {
+			&ch.VideosPerDay, &statusStr, &createdAt, &ch.CTAText, &ch.AffiliateLink, &ch.VideoLanguage); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(platformsJSON), &ch.Platforms)
@@ -96,6 +97,56 @@ func (d *DB) GetChannels() ([]models.Channel, error) {
 		channels = append(channels, ch)
 	}
 	return channels, nil
+}
+
+func (d *DB) GetPost(id string) (models.Post, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, channel_id, channel_name, topic, video_path, status,
+		       platforms_posted, error, created_at, completed_at
+		FROM posts WHERE id = ? LIMIT 1
+	`, id)
+	if err != nil {
+		return models.Post{}, err
+	}
+	defer rows.Close()
+	posts, err := scanPosts(rows)
+	if err != nil || len(posts) == 0 {
+		return models.Post{}, err
+	}
+	return posts[0], nil
+}
+
+func (d *DB) GetPendingPosts(channelID string) ([]models.Post, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, channel_id, channel_name, topic, video_path, status,
+		       platforms_posted, error, created_at, completed_at
+		FROM posts WHERE channel_id = ? AND status = 'pending_approval'
+		ORDER BY created_at DESC
+	`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPosts(rows)
+}
+
+func (d *DB) GetChannelPosts(channelID string, limit int) ([]models.Post, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, channel_id, channel_name, topic, video_path, status,
+		       platforms_posted, error, created_at, completed_at
+		FROM posts WHERE channel_id = ? AND status NOT IN ('pending_approval', 'generating')
+		ORDER BY created_at DESC LIMIT ?
+	`, channelID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPosts(rows)
+}
+
+func (d *DB) UpdatePostStatus(id string, status models.PostStatus) error {
+	_, err := d.conn.Exec(`UPDATE posts SET status = ? WHERE id = ?`, string(status), id)
+	return err
 }
 
 func (d *DB) UpdateChannelStatus(id string, status models.ChannelStatus) error {
