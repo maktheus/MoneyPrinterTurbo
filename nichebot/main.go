@@ -31,6 +31,9 @@ func main() {
 		log.Fatalf("failed to open database: %v", err)
 	}
 
+	// Clean up posts that were mid-flight when the process last exited.
+	database.ResetOrphanedPosts()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

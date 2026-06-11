@@ -123,6 +123,9 @@ func (m *Manager) RejectPost(postID string) {
 }
 
 // runWorker is the main loop for a single channel.
+// runWorker is the main loop for a single channel.
+// Strategy: keep the pipeline full — as long as (active + doneToday) < videosPerDay,
+// generate more videos immediately. This ensures videos are always ready for approval.
 func (m *Manager) runWorker(ctx context.Context, ch models.Channel) {
 	for {
 		select {
@@ -131,9 +134,15 @@ func (m *Manager) runWorker(ctx context.Context, ch models.Channel) {
 		default:
 		}
 
-		todayCount, _ := m.db.GetTodayPostCount(ch.ID)
-		expected := expectedPostsNow(ch.VideosPerDay)
-		if todayCount < expected {
+		active, _ := m.db.GetActivePostCount(ch.ID)
+		doneToday, _ := m.db.GetTodayPostCount(ch.ID)
+		need := ch.VideosPerDay - active - doneToday
+		for i := 0; i < need; i++ {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			m.generateVideo(ctx, ch)
 		}
 
@@ -143,40 +152,6 @@ func (m *Manager) runWorker(ctx context.Context, ch models.Channel) {
 		case <-time.After(15 * time.Minute):
 		}
 	}
-}
-
-// expectedPostsNow calculates how many posts should have happened today by now.
-// Posts are spread evenly from 08:00 to 20:00.
-func expectedPostsNow(videosPerDay int) int {
-	now := time.Now()
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
-	if now.Before(dayStart) {
-		return 0
-	}
-	window := 12 * time.Hour
-	interval := window / time.Duration(videosPerDay)
-	elapsed := now.Sub(dayStart)
-	count := int(elapsed/interval) + 1
-	if count > videosPerDay {
-		count = videosPerDay
-	}
-	return count
-}
-
-// NextPostTime returns when the next post for this channel is due.
-func NextPostTime(ch models.Channel, todayCount int) time.Time {
-	now := time.Now()
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
-	window := 12 * time.Hour
-	interval := window / time.Duration(ch.VideosPerDay)
-
-	for i := 0; i < ch.VideosPerDay; i++ {
-		postTime := dayStart.Add(interval * time.Duration(i))
-		if postTime.After(now) {
-			return postTime
-		}
-	}
-	return dayStart.Add(24 * time.Hour)
 }
 
 // generateVideo generates a video and sets it to pending_approval.
