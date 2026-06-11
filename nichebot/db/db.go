@@ -231,9 +231,10 @@ func (d *DB) GetTopTopics(channelID string, limit int) ([]string, error) {
 
 // GetStats returns summary stats for dashboard
 type ChannelStats struct {
-	TodayCount int
-	TotalCount int
-	FailCount  int
+	TodayCount  int
+	TotalCount  int
+	FailCount   int
+	ActiveCount int // generating + pending_approval + posting
 }
 
 func (d *DB) GetChannelStats(channelID string) (ChannelStats, error) {
@@ -246,7 +247,29 @@ func (d *DB) GetChannelStats(channelID string) (ChannelStats, error) {
 		channelID).Scan(&s.TotalCount)
 	d.conn.QueryRow(`SELECT COUNT(*) FROM posts WHERE channel_id = ? AND status = 'failed'`,
 		channelID).Scan(&s.FailCount)
+	d.conn.QueryRow(`SELECT COUNT(*) FROM posts WHERE channel_id = ? AND status IN ('generating','pending_approval','posting')`,
+		channelID).Scan(&s.ActiveCount)
 	return s, nil
+}
+
+// GetActivePostCount counts posts currently in the pipeline (generating/pending_approval/posting).
+func (d *DB) GetActivePostCount(channelID string) (int, error) {
+	var count int
+	err := d.conn.QueryRow(`
+		SELECT COUNT(*) FROM posts
+		WHERE channel_id = ? AND status IN ('generating','pending_approval','posting')
+	`, channelID).Scan(&count)
+	return count, err
+}
+
+// ResetOrphanedPosts marks any posts stuck in generating/posting as failed.
+// Called on startup to clean up from a previous crash or restart.
+func (d *DB) ResetOrphanedPosts() error {
+	_, err := d.conn.Exec(`
+		UPDATE posts SET status = 'failed', error = 'interrupted: process restarted'
+		WHERE status IN ('generating','posting')
+	`)
+	return err
 }
 
 func scanPosts(rows *sql.Rows) ([]models.Post, error) {

@@ -969,7 +969,7 @@ func (m *Model) rebuildTable() {
 			fmt.Sprintf("%d/%d", stats.TodayCount, ch.VideosPerDay),
 			strconv.Itoa(stats.TotalCount),
 			strconv.Itoa(stats.FailCount),
-			nextPost(ch, stats.TodayCount),
+			nextPost(ch, stats),
 			status,
 		}
 	}
@@ -1445,21 +1445,17 @@ func platName(p models.Platform) string {
 	return string(p)
 }
 
-func nextPost(ch models.Channel, todayCount int) string {
+func nextPost(ch models.Channel, stats db.ChannelStats) string {
 	if ch.Status == models.StatusPaused {
 		return pausedStyle.Render("paused")
 	}
-	t := worker.NextPostTime(ch, todayCount)
-	dur := time.Until(t)
-	if dur <= 0 {
-		return warnStyle.Render("now")
+	if stats.ActiveCount > 0 {
+		return warnStyle.Render(fmt.Sprintf("%d queued", stats.ActiveCount))
 	}
-	h := int(dur.Hours())
-	min := int(dur.Minutes()) % 60
-	if h > 0 {
-		return fmt.Sprintf("in %dh%02dm", h, min)
+	if stats.TodayCount >= ch.VideosPerDay {
+		return okStyle.Render("quota met")
 	}
-	return fmt.Sprintf("in %dm", min)
+	return warnStyle.Render("filling…")
 }
 
 func postStatusIcon(s models.PostStatus) string {
