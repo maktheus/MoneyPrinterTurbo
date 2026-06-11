@@ -26,6 +26,12 @@ func main() {
 		firstRun = true
 	}
 
+	// NICHEBOT_MPT_URL lets Docker/env deployments override the MPT base URL
+	// without editing nichebot.toml (set by the nichebot wrapper script).
+	if v := os.Getenv("NICHEBOT_MPT_URL"); v != "" {
+		cfg.MPT.BaseURL = v
+	}
+
 	database, err := db.New(dbPath)
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)

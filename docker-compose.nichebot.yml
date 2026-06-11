@@ -1,0 +1,38 @@
+# nichebot production compose file.
+# The installer downloads this to ~/.nichebot/docker-compose.yml.
+# To use locally with source build:  docker compose -f docker-compose.nichebot.yml build
+
+name: nichebot
+
+networks:
+  nichebot:
+    name: nichebot
+
+volumes:
+  mpt_storage:
+    name: nichebot_mpt_storage
+  nichebot_data:
+    name: nichebot_data
+
+services:
+  mpt:
+    image: ghcr.io/maktheus/nichebot-mpt:latest
+    container_name: nichebot-mpt
+    command: ["python3", "main.py"]
+    networks:
+      - nichebot
+    volumes:
+      - mpt_storage:/MoneyPrinterTurbo/storage
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python3 -c
+          "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/tasks?page=1')"
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
