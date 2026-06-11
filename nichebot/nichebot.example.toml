@@ -1,0 +1,27 @@
+# NicheBot configuration
+# Copy this to nichebot.toml and fill in your API keys.
+
+[mpt]
+# URL of your running MoneyPrinterTurbo API
+base_url = "http://localhost:8080"
+
+# Default video settings (applied to all channels)
+# Portrait = 9:16  |  Landscape = 16:9  |  Square = 1:1
+video_aspect   = "9:16"
+
+# Edge TTS voice for the narration  (see MoneyPrinterTurbo docs for full list)
+# English: en-US-JennyNeural-Female
+# Portuguese: pt-BR-FranciscaNeural-Female
+voice_name     = "en-US-JennyNeural-Female"
+
+# Leave empty for auto-detect, or set e.g. "en", "pt", "es"
+video_language = "en"
+
+
+[upload_post]
+# Get your key at https://upload-post.com
+api_key  = "your-upload-post-api-key"
+username = "your-upload-post-username"
+
+# PUBLIC_TO_EVERYONE | FOLLOWER_OF_CREATOR | SELF_ONLY
+privacy_level = "PUBLIC_TO_EVERYONE"
