@@ -52,22 +52,29 @@ func (d *DB) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 		CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Add columns introduced after initial release — safe to ignore "duplicate column" errors.
+	d.conn.Exec(`ALTER TABLE channels ADD COLUMN cta_text TEXT NOT NULL DEFAULT ''`)
+	d.conn.Exec(`ALTER TABLE channels ADD COLUMN affiliate_link TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 func (d *DB) SaveChannel(ch models.Channel) error {
 	platforms, _ := json.Marshal(ch.Platforms)
 	_, err := d.conn.Exec(`
-		INSERT OR REPLACE INTO channels (id, name, niche, platforms, videos_per_day, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO channels
+			(id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, ch.ID, ch.Name, ch.Niche, string(platforms), ch.VideosPerDay,
-		string(ch.Status), ch.CreatedAt.Format(time.RFC3339))
+		string(ch.Status), ch.CreatedAt.Format(time.RFC3339), ch.CTAText, ch.AffiliateLink)
 	return err
 }
 
 func (d *DB) GetChannels() ([]models.Channel, error) {
 	rows, err := d.conn.Query(`
-		SELECT id, name, niche, platforms, videos_per_day, status, created_at
+		SELECT id, name, niche, platforms, videos_per_day, status, created_at, cta_text, affiliate_link
 		FROM channels ORDER BY created_at
 	`)
 	if err != nil {
@@ -80,7 +87,7 @@ func (d *DB) GetChannels() ([]models.Channel, error) {
 		var ch models.Channel
 		var platformsJSON, statusStr, createdAt string
 		if err := rows.Scan(&ch.ID, &ch.Name, &ch.Niche, &platformsJSON,
-			&ch.VideosPerDay, &statusStr, &createdAt); err != nil {
+			&ch.VideosPerDay, &statusStr, &createdAt, &ch.CTAText, &ch.AffiliateLink); err != nil {
 			return nil, err
 		}
 		json.Unmarshal([]byte(platformsJSON), &ch.Platforms)

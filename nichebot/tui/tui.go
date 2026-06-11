@@ -106,7 +106,7 @@ type Model struct {
 	logs     []string
 
 	// Add-channel form
-	inputs      [3]textinput.Model
+	inputs      [5]textinput.Model
 	focusIdx    int
 	platforms   map[models.Platform]bool
 	platList    []models.Platform
@@ -149,6 +149,16 @@ func New(database *db.DB, mgr *worker.Manager, cfg *models.Config, cfgPath strin
 	count.CharLimit = 2
 	count.Width = 4
 	count.SetValue("3")
+
+	cta := textinput.New()
+	cta.Placeholder = "Produtos dos meus gatos 🐾 Link na bio!"
+	cta.CharLimit = 200
+	cta.Width = 44
+
+	affLink := textinput.New()
+	affLink.Placeholder = "https://amzn.to/xyz  (opcional)"
+	affLink.CharLimit = 300
+	affLink.Width = 44
 
 	// Setup: MPT inputs
 	mptURL := textinput.New()
@@ -219,7 +229,7 @@ func New(database *db.DB, mgr *worker.Manager, cfg *models.Config, cfgPath strin
 		manager: mgr,
 		cfg:     cfg,
 		cfgPath: cfgPath,
-		inputs:  [3]textinput.Model{name, niche, count},
+		inputs:  [5]textinput.Model{name, niche, count, cta, affLink},
 		platforms: map[models.Platform]bool{
 			models.PlatformTikTok:    true,
 			models.PlatformInstagram: true,
@@ -550,7 +560,7 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab", "down":
 		if m.inPlatforms {
 			m.platFocus = (m.platFocus + 1) % len(m.platList)
-		} else if m.focusIdx < 2 {
+		} else if m.focusIdx < 4 {
 			m.focusIdx++
 			m.syncFocus()
 		} else {
@@ -566,7 +576,7 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.platFocus--
 			} else {
 				m.inPlatforms = false
-				m.focusIdx = 2
+				m.focusIdx = 4
 				m.syncFocus()
 			}
 		} else if m.focusIdx > 0 {
@@ -581,7 +591,7 @@ func (m Model) handleFormKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.platforms[p] = !m.platforms[p]
 			return m, nil
 		}
-		if m.focusIdx < 2 {
+		if m.focusIdx < 4 {
 			m.focusIdx++
 			m.syncFocus()
 			return m, textinput.Blink
@@ -606,6 +616,8 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 	name := strings.TrimSpace(m.inputs[0].Value())
 	niche := strings.TrimSpace(m.inputs[1].Value())
 	countStr := strings.TrimSpace(m.inputs[2].Value())
+	cta := strings.TrimSpace(m.inputs[3].Value())
+	affLink := strings.TrimSpace(m.inputs[4].Value())
 
 	if name == "" || niche == "" {
 		m.formErr = "Nome do canal e nicho são obrigatórios"
@@ -628,13 +640,15 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 	}
 
 	ch := models.Channel{
-		ID:           uuid.NewString(),
-		Name:         name,
-		Niche:        niche,
-		Platforms:    chosen,
-		VideosPerDay: count,
-		Status:       models.StatusActive,
-		CreatedAt:    time.Now(),
+		ID:            uuid.NewString(),
+		Name:          name,
+		Niche:         niche,
+		Platforms:     chosen,
+		VideosPerDay:  count,
+		Status:        models.StatusActive,
+		CreatedAt:     time.Now(),
+		CTAText:       cta,
+		AffiliateLink: affLink,
 	}
 	if err := m.db.SaveChannel(ch); err != nil {
 		m.formErr = fmt.Sprintf("Erro ao salvar: %v", err)
@@ -695,6 +709,8 @@ func (m *Model) resetForm() {
 	m.inputs[0].SetValue("")
 	m.inputs[1].SetValue("")
 	m.inputs[2].SetValue("3")
+	m.inputs[3].SetValue("")
+	m.inputs[4].SetValue("")
 	m.focusIdx = 0
 	m.syncFocus()
 	m.inPlatforms = false
@@ -973,19 +989,32 @@ func (m Model) renderAddChannel() string {
 	b.WriteString(titleStyle.Render("◆ Adicionar Canal"))
 	b.WriteString("\n\n")
 
-	labels := []string{"Nome do Canal", "Nicho / Tópico", "Vídeos por dia"}
+	type fieldMeta struct {
+		label string
+		hint  string
+	}
+	fields := []fieldMeta{
+		{"Nome do Canal", ""},
+		{"Nicho / Tópico", ""},
+		{"Vídeos por dia", ""},
+		{"CTA — call-to-action  (aparece em todos os posts)", ""},
+		{"Link de afiliado  (incluído só no Facebook e YouTube — lá é clicável)", "⚠  No TikTok e Instagram links não são clicáveis. O CTA direciona para a bio."},
+	}
 	for i, inp := range m.inputs {
 		focused := i == m.focusIdx && !m.inPlatforms
 		if focused {
-			b.WriteString(activeStyle.Render("  ▸ " + labels[i]))
+			b.WriteString(activeStyle.Render("  ▸ " + fields[i].label))
 		} else {
-			b.WriteString(dimStyle.Render("    " + labels[i]))
+			b.WriteString(dimStyle.Render("    " + fields[i].label))
 		}
 		b.WriteString("\n")
 		if focused {
 			b.WriteString("    " + focusedBorder.Render(inp.View()))
 		} else {
 			b.WriteString("    " + blurredBorder.Render(inp.View()))
+		}
+		if fields[i].hint != "" {
+			b.WriteString("\n    " + dimStyle.Render(fields[i].hint))
 		}
 		b.WriteString("\n\n")
 	}

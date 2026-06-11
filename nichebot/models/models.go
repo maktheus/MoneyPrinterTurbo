@@ -34,13 +34,15 @@ const (
 )
 
 type Channel struct {
-	ID           string
-	Name         string
-	Niche        string
-	Platforms    []Platform
-	VideosPerDay int
-	Status       ChannelStatus
-	CreatedAt    time.Time
+	ID            string
+	Name          string
+	Niche         string
+	Platforms     []Platform
+	VideosPerDay  int
+	Status        ChannelStatus
+	CreatedAt     time.Time
+	CTAText       string // call-to-action appended to every caption
+	AffiliateLink string // included in caption only on FB and YouTube (support clickable links)
 }
 
 func (c Channel) PlatformsJSON() string {

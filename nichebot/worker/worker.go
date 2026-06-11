@@ -6,6 +6,7 @@ import (
 	"nichebot/client"
 	"nichebot/db"
 	"nichebot/models"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,8 +167,7 @@ func (m *Manager) generateAndPost(ctx context.Context, ch models.Channel) {
 	m.db.SavePost(post)
 	m.send(post, fmt.Sprintf("📤 [%s] Uploading to %s…", ch.Name, platformNames(ch.Platforms)))
 
-	title := fmt.Sprintf("%s #shorts #viral #fyp", ch.Niche)
-	if err := m.upCli.Upload(videoPath, title, ch.Platforms); err != nil {
+	if err := m.uploadToAll(videoPath, ch); err != nil {
 		m.failPost(&post, ch, fmt.Sprintf("upload: %v", err))
 		return
 	}
@@ -178,6 +178,57 @@ func (m *Manager) generateAndPost(ctx context.Context, ch models.Channel) {
 	post.CompletedAt = &now
 	m.db.SavePost(post)
 	m.send(post, fmt.Sprintf("✅ [%s] Posted to %s!", ch.Name, platformNames(ch.Platforms)))
+}
+
+// uploadToAll splits platforms into two groups and posts with appropriate captions:
+//   - TikTok / Instagram: CTA text only (links are not clickable there)
+//   - Facebook / YouTube: CTA text + affiliate link (clickable in posts/descriptions)
+func (m *Manager) uploadToAll(videoPath string, ch models.Channel) error {
+	noLink, withLink := splitByLinkSupport(ch.Platforms)
+
+	if len(noLink) > 0 {
+		caption := buildCaption(ch.Niche, ch.CTAText, "")
+		if err := m.upCli.Upload(videoPath, caption, noLink); err != nil {
+			return fmt.Errorf("%s: %w", platformNames(noLink), err)
+		}
+	}
+	if len(withLink) > 0 {
+		caption := buildCaption(ch.Niche, ch.CTAText, ch.AffiliateLink)
+		if err := m.upCli.Upload(videoPath, caption, withLink); err != nil {
+			return fmt.Errorf("%s: %w", platformNames(withLink), err)
+		}
+	}
+	return nil
+}
+
+// splitByLinkSupport separates platforms by whether they support clickable links in posts.
+func splitByLinkSupport(platforms []models.Platform) (noLink, withLink []models.Platform) {
+	for _, p := range platforms {
+		switch p {
+		case models.PlatformFacebook, models.PlatformYouTube:
+			withLink = append(withLink, p)
+		default: // TikTok, Instagram
+			noLink = append(noLink, p)
+		}
+	}
+	return
+}
+
+// buildCaption assembles the post caption.
+// affiliateLink is only included when non-empty (FB and YT calls only).
+func buildCaption(niche, cta, affiliateLink string) string {
+	var b strings.Builder
+	b.WriteString(niche)
+	if cta != "" {
+		b.WriteString("\n\n")
+		b.WriteString(cta)
+	}
+	if affiliateLink != "" {
+		b.WriteString("\n")
+		b.WriteString(affiliateLink)
+	}
+	b.WriteString("\n\n#shorts #viral #fyp")
+	return b.String()
 }
 
 func (m *Manager) failPost(post *models.Post, ch models.Channel, errMsg string) {
