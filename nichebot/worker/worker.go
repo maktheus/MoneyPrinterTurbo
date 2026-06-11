@@ -22,14 +22,15 @@ type PostUpdateMsg struct {
 
 // Manager owns one goroutine per active channel.
 type Manager struct {
-	ctx     context.Context
-	db      *db.DB
-	cfg     *models.Config
-	program *tea.Program
-	cancels map[string]context.CancelFunc
-	mu      sync.Mutex
-	mptCli  *client.MPTClient
-	upCli   *client.UploadPostClient
+	ctx      context.Context
+	db       *db.DB
+	cfg      *models.Config
+	program  *tea.Program
+	cancels  map[string]context.CancelFunc
+	mu       sync.Mutex
+	mptCli   *client.MPTClient
+	upCli    *client.UploadPostClient
+	tgCli    *client.TelegramClient
 }
 
 func NewManager(ctx context.Context, database *db.DB, cfg *models.Config) *Manager {
@@ -40,6 +41,7 @@ func NewManager(ctx context.Context, database *db.DB, cfg *models.Config) *Manag
 		cancels: make(map[string]context.CancelFunc),
 		mptCli:  client.NewMPTClient(cfg.MPT.BaseURL),
 		upCli:   client.NewUploadPostClient(&cfg.UploadPost),
+		tgCli:   client.NewTelegramClient(cfg.Telegram.BotToken, cfg.Telegram.ChatID),
 	}
 }
 
@@ -76,8 +78,51 @@ func (m *Manager) IsRunning(channelID string) bool {
 	return ok
 }
 
+// ApproveAndPost picks up a pending_approval post and uploads it in a goroutine.
+func (m *Manager) ApproveAndPost(postID string) {
+	post, err := m.db.GetPost(postID)
+	if err != nil || post.ID == "" {
+		return
+	}
+
+	// Look up the channel to get CTA / affiliate link / platforms
+	channels, _ := m.db.GetChannels()
+	var ch models.Channel
+	for _, c := range channels {
+		if c.ID == post.ChannelID {
+			ch = c
+			break
+		}
+	}
+	if ch.ID == "" {
+		return
+	}
+
+	post.Status = models.PostPosting
+	m.db.SavePost(post)
+	m.send(post, fmt.Sprintf("📤 [%s] Aprovado — enviando para %s…", ch.Name, platformNames(ch.Platforms)))
+
+	go func() {
+		if err := m.uploadToAll(post.VideoPath, ch); err != nil {
+			m.failPost(&post, ch, fmt.Sprintf("upload: %v", err))
+			return
+		}
+		now := time.Now()
+		post.Status = models.PostDone
+		post.PlatformsPosted = ch.Platforms
+		post.CompletedAt = &now
+		m.db.SavePost(post)
+		m.send(post, fmt.Sprintf("✅ [%s] Postado em %s!", ch.Name, platformNames(ch.Platforms)))
+		m.telegramNotify(fmt.Sprintf("✅ <b>%s</b> postado em %s\nTópico: %s", ch.Name, platformNames(ch.Platforms), post.Topic))
+	}()
+}
+
+// RejectPost marks a pending post as rejected.
+func (m *Manager) RejectPost(postID string) {
+	m.db.UpdatePostStatus(postID, models.PostRejected)
+}
+
 // runWorker is the main loop for a single channel.
-// It checks every 15 minutes whether a new post is due and generates one if so.
 func (m *Manager) runWorker(ctx context.Context, ch models.Channel) {
 	for {
 		select {
@@ -89,7 +134,7 @@ func (m *Manager) runWorker(ctx context.Context, ch models.Channel) {
 		todayCount, _ := m.db.GetTodayPostCount(ch.ID)
 		expected := expectedPostsNow(ch.VideosPerDay)
 		if todayCount < expected {
-			m.generateAndPost(ctx, ch)
+			m.generateVideo(ctx, ch)
 		}
 
 		select {
@@ -131,11 +176,12 @@ func NextPostTime(ch models.Channel, todayCount int) time.Time {
 			return postTime
 		}
 	}
-	// All posts for today done — next is tomorrow at 08:00
 	return dayStart.Add(24 * time.Hour)
 }
 
-func (m *Manager) generateAndPost(ctx context.Context, ch models.Channel) {
+// generateVideo generates a video and sets it to pending_approval.
+// It does NOT post — the user must approve from the TUI.
+func (m *Manager) generateVideo(ctx context.Context, ch models.Channel) {
 	post := models.Post{
 		ID:          uuid.NewString(),
 		ChannelID:   ch.ID,
@@ -145,17 +191,25 @@ func (m *Manager) generateAndPost(ctx context.Context, ch models.Channel) {
 		CreatedAt:   time.Now(),
 	}
 	m.db.SavePost(post)
-	m.send(post, fmt.Sprintf("🎬 [%s] Starting: %s", ch.Name, ch.Niche))
+	m.send(post, fmt.Sprintf("🎬 [%s] Gerando: %s", ch.Name, ch.Niche))
 
-	taskID, err := m.mptCli.GenerateVideo(&m.cfg.MPT, ch.Niche)
+	// Use per-channel language if set, otherwise fall back to global config
+	lang := ch.VideoLanguage
+	if lang == "" {
+		lang = m.cfg.MPT.VideoLanguage
+	}
+	cfgOverride := m.cfg.MPT
+	cfgOverride.VideoLanguage = lang
+
+	taskID, err := m.mptCli.GenerateVideo(&cfgOverride, ch.Niche)
 	if err != nil {
 		m.failPost(&post, ch, fmt.Sprintf("generate: %v", err))
 		return
 	}
-	m.send(post, fmt.Sprintf("⏳ [%s] Task queued (%s…)", ch.Name, taskID[:8]))
+	m.send(post, fmt.Sprintf("⏳ [%s] Renderizando… (task %s)", ch.Name, taskID[:8]))
 
 	videoPath, err := m.mptCli.WaitForTask(taskID, func(pct int) {
-		m.send(post, fmt.Sprintf("⏳ [%s] Rendering %d%%", ch.Name, pct))
+		m.send(post, fmt.Sprintf("⏳ [%s] %d%%", ch.Name, pct))
 	})
 	if err != nil {
 		m.failPost(&post, ch, fmt.Sprintf("render: %v", err))
@@ -163,26 +217,17 @@ func (m *Manager) generateAndPost(ctx context.Context, ch models.Channel) {
 	}
 
 	post.VideoPath = videoPath
-	post.Status = models.PostPosting
+	post.Status = models.PostPendingApproval
 	m.db.SavePost(post)
-	m.send(post, fmt.Sprintf("📤 [%s] Uploading to %s…", ch.Name, platformNames(ch.Platforms)))
-
-	if err := m.uploadToAll(videoPath, ch); err != nil {
-		m.failPost(&post, ch, fmt.Sprintf("upload: %v", err))
-		return
-	}
-
-	now := time.Now()
-	post.Status = models.PostDone
-	post.PlatformsPosted = ch.Platforms
-	post.CompletedAt = &now
-	m.db.SavePost(post)
-	m.send(post, fmt.Sprintf("✅ [%s] Posted to %s!", ch.Name, platformNames(ch.Platforms)))
+	m.send(post, fmt.Sprintf("⏸  [%s] Vídeo pronto — aguardando aprovação", ch.Name))
+	m.telegramNotify(fmt.Sprintf(
+		"⏸ <b>%s</b> — vídeo pronto para aprovação!\nTópico: %s\nArquivo: %s",
+		ch.Name, ch.Niche, videoPath,
+	))
 }
 
-// uploadToAll splits platforms into two groups and posts with appropriate captions:
-//   - TikTok / Instagram: CTA text only (links are not clickable there)
-//   - Facebook / YouTube: CTA text + affiliate link (clickable in posts/descriptions)
+// ── Upload helpers ────────────────────────────────────────────────────────────
+
 func (m *Manager) uploadToAll(videoPath string, ch models.Channel) error {
 	noLink, withLink := splitByLinkSupport(ch.Platforms)
 
@@ -201,21 +246,18 @@ func (m *Manager) uploadToAll(videoPath string, ch models.Channel) error {
 	return nil
 }
 
-// splitByLinkSupport separates platforms by whether they support clickable links in posts.
 func splitByLinkSupport(platforms []models.Platform) (noLink, withLink []models.Platform) {
 	for _, p := range platforms {
 		switch p {
 		case models.PlatformFacebook, models.PlatformYouTube:
 			withLink = append(withLink, p)
-		default: // TikTok, Instagram
+		default:
 			noLink = append(noLink, p)
 		}
 	}
 	return
 }
 
-// buildCaption assembles the post caption.
-// affiliateLink is only included when non-empty (FB and YT calls only).
 func buildCaption(niche, cta, affiliateLink string) string {
 	var b strings.Builder
 	b.WriteString(niche)
@@ -231,13 +273,16 @@ func buildCaption(niche, cta, affiliateLink string) string {
 	return b.String()
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 func (m *Manager) failPost(post *models.Post, ch models.Channel, errMsg string) {
 	now := time.Now()
 	post.Status = models.PostFailed
 	post.Error = errMsg
 	post.CompletedAt = &now
 	m.db.SavePost(*post)
-	m.send(*post, fmt.Sprintf("❌ [%s] Failed: %s", ch.Name, errMsg))
+	m.send(*post, fmt.Sprintf("❌ [%s] Falhou: %s", ch.Name, errMsg))
+	m.telegramNotify(fmt.Sprintf("❌ <b>%s</b> falhou: %s", ch.Name, errMsg))
 }
 
 func (m *Manager) send(post models.Post, log string) {
@@ -246,24 +291,27 @@ func (m *Manager) send(post models.Post, log string) {
 	}
 }
 
+func (m *Manager) telegramNotify(text string) {
+	if m.cfg.Telegram.Enabled {
+		go m.tgCli.Send(text) // fire-and-forget
+	}
+}
+
 func platformNames(platforms []models.Platform) string {
-	s := ""
-	for i, p := range platforms {
-		if i > 0 {
-			s += "+"
-		}
+	parts := make([]string, 0, len(platforms))
+	for _, p := range platforms {
 		switch p {
 		case models.PlatformTikTok:
-			s += "TikTok"
+			parts = append(parts, "TikTok")
 		case models.PlatformInstagram:
-			s += "IG"
+			parts = append(parts, "IG")
 		case models.PlatformFacebook:
-			s += "FB"
+			parts = append(parts, "FB")
 		case models.PlatformYouTube:
-			s += "YT"
+			parts = append(parts, "YT")
 		default:
-			s += string(p)
+			parts = append(parts, string(p))
 		}
 	}
-	return s
+	return strings.Join(parts, "+")
 }

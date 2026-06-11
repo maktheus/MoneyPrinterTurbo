@@ -27,10 +27,12 @@ const (
 type PostStatus string
 
 const (
-	PostGenerating PostStatus = "generating"
-	PostPosting    PostStatus = "posting"
-	PostDone       PostStatus = "done"
-	PostFailed     PostStatus = "failed"
+	PostGenerating      PostStatus = "generating"
+	PostPendingApproval PostStatus = "pending_approval" // waiting for user to approve before posting
+	PostPosting         PostStatus = "posting"
+	PostDone            PostStatus = "done"
+	PostFailed          PostStatus = "failed"
+	PostRejected        PostStatus = "rejected"
 )
 
 type Channel struct {
@@ -43,6 +45,7 @@ type Channel struct {
 	CreatedAt     time.Time
 	CTAText       string // call-to-action appended to every caption
 	AffiliateLink string // included in caption only on FB and YouTube (support clickable links)
+	VideoLanguage string // per-channel language override; empty = use global MPT config
 }
 
 func (c Channel) PlatformsJSON() string {
@@ -66,6 +69,8 @@ type Post struct {
 type Config struct {
 	MPT        MPTConfig        `toml:"mpt"`
 	UploadPost UploadPostConfig `toml:"upload_post"`
+	Telegram   TelegramConfig   `toml:"telegram"`
+	UILanguage string           `toml:"ui_language"` // "pt" or "en"
 }
 
 type MPTConfig struct {
@@ -81,6 +86,12 @@ type UploadPostConfig struct {
 	PrivacyLevel string `toml:"privacy_level"`
 }
 
+type TelegramConfig struct {
+	BotToken string `toml:"bot_token"`
+	ChatID   string `toml:"chat_id"`
+	Enabled  bool   `toml:"enabled"`
+}
+
 func LoadConfig(path string) (*Config, error) {
 	var cfg Config
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
@@ -91,6 +102,7 @@ func LoadConfig(path string) (*Config, error) {
 
 func DefaultConfig() *Config {
 	return &Config{
+		UILanguage: "pt",
 		MPT: MPTConfig{
 			BaseURL:       "http://localhost:8080",
 			VideoAspect:   "9:16",
@@ -101,6 +113,11 @@ func DefaultConfig() *Config {
 			APIKey:       "your-upload-post-api-key",
 			Username:     "your-upload-post-username",
 			PrivacyLevel: "PUBLIC_TO_EVERYONE",
+		},
+		Telegram: TelegramConfig{
+			BotToken: "",
+			ChatID:   "",
+			Enabled:  false,
 		},
 	}
 }
