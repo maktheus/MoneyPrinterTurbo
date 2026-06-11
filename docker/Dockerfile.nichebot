@@ -1,0 +1,19 @@
+# ── Stage 1: build ───────────────────────────────────────────────────────────
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /build
+COPY nichebot/ .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o nichebot .
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata
+
+# /data is the working directory — nichebot.toml and nichebot.db live here
+WORKDIR /data
+
+COPY --from=builder /build/nichebot /usr/local/bin/nichebot
+
+ENTRYPOINT ["/usr/local/bin/nichebot"]
