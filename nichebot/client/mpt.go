@@ -9,6 +9,7 @@ import (
 	"nichebot/models"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -49,11 +50,14 @@ type taskStatusResp struct {
 	} `json:"data"`
 }
 
+// MPT task state constants (from app/models/const.py)
 const (
-	stateProcessing = 1
-	stateComplete   = 2
-	stateFailed     = 3
+	stateComplete   = 1
+	stateFailed     = -1
+	stateProcessing = 4
 )
+
+const apiPrefix = "/api/v1"
 
 // GenerateVideo submits a video generation task and returns the task ID.
 func (c *MPTClient) GenerateVideo(cfg *models.MPTConfig, subject string) (string, error) {
@@ -67,7 +71,7 @@ func (c *MPTClient) GenerateVideo(cfg *models.MPTConfig, subject string) (string
 	}
 
 	body, _ := json.Marshal(req)
-	resp, err := c.httpClient.Post(c.baseURL+"/videos", "application/json", bytes.NewReader(body))
+	resp, err := c.httpClient.Post(c.baseURL+apiPrefix+"/videos", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("request: %w", err)
 	}
@@ -91,7 +95,7 @@ func (c *MPTClient) WaitForTask(taskID string, onProgress func(int)) (string, er
 	for {
 		time.Sleep(10 * time.Second)
 
-		resp, err := poll.Get(fmt.Sprintf("%s/tasks/%s", c.baseURL, taskID))
+		resp, err := poll.Get(fmt.Sprintf("%s%s/tasks/%s", c.baseURL, apiPrefix, taskID))
 		if err != nil {
 			continue
 		}
@@ -126,6 +130,11 @@ func (c *MPTClient) downloadVideo(taskID, videoURL string) (string, error) {
 	}
 
 	outPath := filepath.Join(dir, "video.mp4")
+
+	// MPT may return a relative path ("/tasks/...") when no endpoint is configured.
+	if !strings.HasPrefix(videoURL, "http") {
+		videoURL = c.baseURL + videoURL
+	}
 
 	resp, err := c.httpClient.Get(videoURL)
 	if err != nil {
